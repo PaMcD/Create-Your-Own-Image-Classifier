@@ -87,28 +87,7 @@ def process_image(image_path):
     # return tensor
     return tensor    
 
-def imshow(image, ax=None, title=None):
-    """Imshow for Tensor."""
-    if ax is None:
-        fig, ax = plt.subplots()
-    
-    # PyTorch tensors assume the color channel is the first dimension
-    # but matplotlib assumes is the third dimension
-    image = image.numpy().transpose((1, 2, 0))
-    
-    # Undo preprocessing
-    mean = np.array([0.485, 0.456, 0.406])
-    std = np.array([0.229, 0.224, 0.225])
-    image = std * image + mean
-    
-    # Image needs to be clipped between 0 and 1 or it looks like noise when displayed
-    image = np.clip(image, 0, 1)
-    
-    ax.imshow(image)
-    
-    return ax
-
-def predict(image_path, model, topk=5, device="cuda"):
+def predict(image_path, model, topk, device, cat_to_name):
     ''' Predict the class (or classes) of an image using a trained deep learning model.
     '''
     image = process_image(image_path)
@@ -120,45 +99,56 @@ def predict(image_path, model, topk=5, device="cuda"):
     with torch.no_grad():
         ps = torch.exp(model(image))
         
-    return ps.topk(topk, dim=1)
+    ps, top_classes = ps.topk(topk, dim=1)
     
-# TODO: Implement the code to predict the class from an image file
+    idx_to_flower = {v:cat_to_name[k] for k, v in model.class_to_idx.items()}
+    predicted_flowers_list = [idx_to_flower[i] for i in top_classes.tolist()[0]]
 
-# Create the parser and add arguments
-parser = argparse.ArgumentParser()
+    # returning both as lists instead of torch objects for simplicity
+    return ps.tolist()[0], predicted_flowers_list
 
-# required arguments
-parser.add_argument(dest='image_filepath', help="This is a image file that you want to classify")
-parser.add_argument(dest='model_filepath', help="This is file path of a checkpoint file, including the extension")
-parser.add_argument(dest='category_names_json_filepath', help="This is a file path to a json file that maps categories to real names")
+def print_predictions(args):
+    # load model
+    model = load_checkpoint(args.model_filepath)
 
-# optional arguments
-parser.add_argument('--top_k', dest='top_k', help="This is the number of most likely classes to return, default is 5", default=5, type=int)
-parser.add_argument('--inference_device', dest='inference_device', help="This is type of device the model will use for inference. Either CUDA or CPU. Default is CUDA if available, CPU otherwise", default="CUDA", type=str, choices=['CUDA', 'CPU'])
+    # decide device depending on user arguments and device availability
+    if args.gpu and torch.cuda.is_available():
+        device = 'cuda'
+    if args.gpu and not(torch.cuda.is_available()):
+        device = 'cpu'
+        print("GPU was selected as the training device, but no GPU is available. Using CPU instead.")
+    else:
+        device = 'cpu'
 
-# Parse and print the results
-args = parser.parse_args()
+    model = model.to(device)
 
-# load model
-model = load_checkpoint(args.model_filepath)
-device = torch.device("cuda" if torch.cuda.is_available() and args.inference_device.lower() == "cuda" else "cpu")
-model = model.to(device)
+    # print(model.class_to_index)
 
-# print(model.class_to_index)
+    with open(args.category_names_json_filepath, 'r') as f:
+        cat_to_name = json.load(f)
 
+    # predict image
+    top_ps, top_classes = predict(args.image_filepath, model, args.top_k, device, cat_to_name)
 
-with open(args.category_names_json_filepath, 'r') as f:
-    cat_to_name = json.load(f)
-
-idx_to_flower = {v:cat_to_name[k] for k, v in model.class_to_idx.items()}
+    print("Predictions:")
+    for i in range(args.top_k):
+          print("#{: <3} {: <25} Prob: {:.2f}%".format(i, top_classes[i], top_ps[i]*100))
     
-# predict image
-top_ps, top_classes = predict(args.image_filepath, model, args.top_k)
-predicted_flowers = [idx_to_flower[i] for i in top_classes.tolist()[0]]
-
-print("Predictions:")
-for i in range(args.top_k):
-      print("#{: <3} {: <25} Prob: {:.2f}%".format(i, predicted_flowers[i], top_ps[0][i].item()*100))
-
-
+if __name__ == '__main__':
     
+    # Create the parser and add arguments
+    parser = argparse.ArgumentParser()
+
+    # required arguments
+    parser.add_argument(dest='image_filepath', help="This is a image file that you want to classify")
+    parser.add_argument(dest='model_filepath', help="This is file path of a checkpoint file, including the extension")
+
+    # optional arguments
+    parser.add_argument('--category_names_json_filepath', dest='category_names_json_filepath', help="This is a file path to a json file that maps categories to real names", default='cat_to_name.json')
+    parser.add_argument('--top_k', dest='top_k', help="This is the number of most likely classes to return, default is 5", default=5, type=int)
+    parser.add_argument('--gpu', dest='gpu', help="Include this argument if you want to train the model on the GPU via CUDA", action='store_true')
+
+    # Parse and print the results
+    args = parser.parse_args()
+
+    print_predictions(args)
